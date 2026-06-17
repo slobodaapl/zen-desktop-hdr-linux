@@ -1,0 +1,45 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+# Linux Wayland HDR video path. Runtime still needs the NVIDIA VA-API direct
+# backend environment from AGENTS.md when testing on the local target machine.
+- name: gfx.webrender.compositor.force-enabled
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: gfx.webrender.overlay-hdr
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: gfx.webrender.overlay-vp-auto-hdr
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: gfx.color_management.hdr
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: gfx.color_management.hdr.force_enabled
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: widget.dmabuf.force-enabled
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: media.hardware-video-decoding.force-enabled
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: media.ffmpeg.vaapi.force-surface-zero-copy
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: media.mediasource.vp9.enabled
+  value: true
+  condition: "defined(MOZ_WIDGET_GTK)"
+
+- name: media.av1.enabled
+  value: false
+  condition: "defined(MOZ_WIDGET_GTK)"

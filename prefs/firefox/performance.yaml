@@ -14,6 +14,6 @@
 # Make sure its in sync with:
 # https://searchfox.org/firefox-main/rev/1477feb9706f4ccc5bd571c1c215832a6fbb7464/modules/libpref/init/StaticPrefList.yaml#7741-7748
 - name: gfx.webrender.compositor
-  condition: "defined(XP_WIN) || defined(XP_DARWIN)"
+  condition: "defined(XP_WIN) || defined(XP_DARWIN) || defined(MOZ_WIDGET_GTK)"
   value: "@cond"
   mirror: once

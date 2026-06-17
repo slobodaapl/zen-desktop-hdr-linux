@@ -1,0 +1,27 @@
+diff --git a/dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp b/dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp
+--- a/dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp
++++ b/dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp
+@@ -1819,17 +1819,18 @@ MediaResult FFmpegVideoDecoder<LIBAV_VER>::CreateImage(
+ bool FFmpegVideoDecoder<LIBAV_VER>::GetVAAPISurfaceDescriptor(
+     VADRMPRIMESurfaceDescriptor* aVaDesc) {
+   VASurfaceID surface_id = (VASurfaceID)(uintptr_t)mFrame->data[3];
+-  VAStatus vas = VALibWrapper::sFuncs.vaExportSurfaceHandle(
++  VAStatus vas = VALibWrapper::sFuncs.vaSyncSurface(mDisplay, surface_id);
++  if (vas != VA_STATUS_SUCCESS) {
++    FFMPEG_LOG("GetVAAPISurfaceDescriptor(): vaSyncSurface failed");
++    return false;
++  }
++  vas = VALibWrapper::sFuncs.vaExportSurfaceHandle(
+       mDisplay, surface_id, VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2,
+       VA_EXPORT_SURFACE_READ_ONLY | VA_EXPORT_SURFACE_SEPARATE_LAYERS, aVaDesc);
+   if (vas != VA_STATUS_SUCCESS) {
+     FFMPEG_LOG("GetVAAPISurfaceDescriptor(): vaExportSurfaceHandle failed");
+     return false;
+   }
+-  vas = VALibWrapper::sFuncs.vaSyncSurface(mDisplay, surface_id);
+-  if (vas != VA_STATUS_SUCCESS) {
+-    FFMPEG_LOG("GetVAAPISurfaceDescriptor(): vaSyncSurface failed");
+-  }
+   return true;
+ }
+ 

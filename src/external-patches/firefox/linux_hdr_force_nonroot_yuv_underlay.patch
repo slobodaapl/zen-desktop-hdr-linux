@@ -1,0 +1,124 @@
+diff --git a/gfx/wr/webrender/src/tile_cache/mod.rs b/gfx/wr/webrender/src/tile_cache/mod.rs
+--- a/gfx/wr/webrender/src/tile_cache/mod.rs
++++ b/gfx/wr/webrender/src/tile_cache/mod.rs
+@@ -28,5 +28,5 @@ use crate::invalidation::compare::{PrimitiveDependency, ImageDependency};
+ use crate::invalidation::compare::PrimitiveComparisonKey;
+ use crate::invalidation::compare::{OpacityBindingInfo, ColorBindingInfo};
+-use crate::picture::{SurfaceTextureDescriptor, PictureCompositeMode, SurfaceIndex, clamp};
++use crate::picture::{BlitReason, SurfaceTextureDescriptor, PictureCompositeMode, SurfaceIndex, clamp};
+ use crate::picture::{get_relative_scale_offset, PicturePrimitive};
+ use crate::picture::MAX_COMPOSITOR_SURFACES_SIZE;
+@@ -1528,6 +1528,7 @@ impl TileCacheInstance {
+         clip_store: &ClipStore,
+         composite_state: &CompositeState,
+         force: bool,
++        allow_non_root_tile_cache: bool,
+     ) -> Result<CompositorSurfaceKind, SurfacePromotionFailure> {
+         use SurfacePromotionFailure::*;
+ 
+@@ -1618,30 +1618,37 @@ impl TileCacheInstance {
+                 {
+                     return Err(UnderlayLowQualityZoom);
+                 }
+             }
+             CompositorSurfaceKind::Blit => unreachable!(),
+         }
+ 
+-        // If not on the root picture cache, it has some kind of
+-        // complex effect (such as a filter, mix-blend-mode or 3d transform).
+-        if !is_root_tile_cache {
+-            return Err(NotRootTileCache);
+-        }
+-
+         let mapper : SpaceMapper<PicturePixel, WorldPixel> = SpaceMapper::new_with_target(
+             frame_context.root_spatial_node_index,
+             prim_spatial_node_index,
+             frame_context.global_screen_world_rect,
+             &frame_context.spatial_tree);
+         let transform = mapper.get_transform();
+         if !transform.is_2d_scale_translation() {
+             let result = Err(ComplexTransform);
+             // Unfortunately, ComplexTransform absolutely prevents proper
+ 				    // functioning of surface promotion. Treating this as a warning
+             // instead of an error will cause a crash in get_relative_scale_offset.
+             return result;
+         }
+ 
++        // If not on the root picture cache, it may have some kind of
++        // complex effect (such as a filter, mix-blend-mode or 3d transform).
++        // Wide-YUV video can opt in to a stricter local exception only after
++        // proving the transform is simple enough for get_relative_scale_offset().
++        if !is_root_tile_cache {
++            let result = Err(NotRootTileCache);
++            if !allow_non_root_tile_cache {
++                return result;
++            }
++
++            self.report_promotion_failure(result, pic_coverage_rect, true);
++        }
++
+         if self.slice_flags.contains(SliceFlags::IS_ATOMIC) {
+             return Err(SliceAtomic);
+         }
+@@ -2393,15 +2393,16 @@ impl TileCacheInstance {
+                     } else {
+                         promotion_result = self.can_promote_to_surface(prim_clip_chain,
+                                                           prim_spatial_node_index,
+                                                           is_root_tile_cache,
+                                                           sub_slice_index,
+                                                           CompositorSurfaceKind::Overlay,
+                                                           pic_coverage_rect,
+                                                           frame_context,
+                                                           data_stores,
+                                                           clip_store,
+                                                           composite_state,
+-                                                          false);
++                                                          false,
++                                                          false);
+                     }
+ 
+                     // Native OS compositors (DC and CA, at least) support premultiplied alpha
+@@ -2450,21 +2457,42 @@ impl TileCacheInstance {
+                     let promotion_attempts =
+                         [CompositorSurfaceKind::Overlay, CompositorSurfaceKind::Underlay];
+ 
+                     for kind in promotion_attempts {
++                        let non_root_surface_mode = if is_root_tile_cache {
++                            None
++                        } else {
++                            surface_stack.last()
++                                .and_then(|(pic_index, _)| pictures.get(pic_index.0))
++                                .and_then(|pic| pic.raster_config.as_ref())
++                                .map(|raster_config| &raster_config.composite_mode)
++                        };
++                        let allow_non_root_tile_cache =
++                            force &&
++                            kind == CompositorSurfaceKind::Underlay &&
++                            matches!(composite_state.compositor_kind, CompositorKind::Native { .. }) &&
++                            surface_stack.len() == 1 &&
++                            matches!(
++                                non_root_surface_mode,
++                                Some(PictureCompositeMode::Blit(BlitReason::CLIP)) |
++                                    Some(PictureCompositeMode::TileCache { .. })
++                            ) &&
++                            self.compositor_clip.is_none();
++
+                         // Since this might be an attempt after an earlier error, clear the flag
+                         // so that we are allowed to report another error.
+                         promotion_result = self.can_promote_to_surface(
+                                                     prim_clip_chain,
+                                                     prim_spatial_node_index,
+                                                     is_root_tile_cache,
+                                                     sub_slice_index,
+                                                     kind,
+                                                     pic_coverage_rect,
+                                                     frame_context,
+                                                     data_stores,
+                                                     clip_store,
+                                                     composite_state,
+-                                                    force);
++                                                    force,
++                                                    allow_non_root_tile_cache);
+                         if promotion_result.is_ok() {
+                             break;
+                         }

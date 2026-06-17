@@ -1,0 +1,30 @@
+diff --git a/widget/gtk/nsWaylandDisplay.h b/widget/gtk/nsWaylandDisplay.h
+--- a/widget/gtk/nsWaylandDisplay.h
++++ b/widget/gtk/nsWaylandDisplay.h
+@@ -124,6 +124,9 @@
+   bool IsHDREnabled() const {
+     return mColorManagerSupportedFeature.mParametric;
+   }
++  bool SupportsColorManagerLuminances() const {
++    return mColorManagerSupportedFeature.mLuminances;
++  }
+   void SetSupportedCoefficientsAndRanges(uint32_t aCoefficients,
+                                          uint32_t aRange);
+   uint32_t GetColorRange(uint32_t aCoefficients, bool aFullRange);
+diff --git a/widget/gtk/WaylandSurface.cpp b/widget/gtk/WaylandSurface.cpp
+--- a/widget/gtk/WaylandSurface.cpp
++++ b/widget/gtk/WaylandSurface.cpp
+@@ -1347,6 +1347,13 @@
+           params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
+       break;
+   }
++  if (aTransferFunction == gfx::TransferFunction::PQ &&
++      WaylandDisplayGet()->SupportsColorManagerLuminances()) {
++    // Gecko does not plumb per-video mastering metadata to this layer yet; use
++    // HDR10/PQ defaults so the compositor has an explicit reference white.
++    wp_image_description_creator_params_v1_set_luminances(params, 0, 10000,
++                                                          203);
++  }
+   mImageDescription = wp_image_description_creator_params_v1_create(params);
+   // wp_image_description_creator_params_v1_create() consumes params
+   params = nullptr;

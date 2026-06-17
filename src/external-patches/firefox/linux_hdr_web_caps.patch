@@ -1,0 +1,54 @@
+diff --git a/layout/style/nsMediaFeatures.cpp b/layout/style/nsMediaFeatures.cpp
+--- a/layout/style/nsMediaFeatures.cpp
++++ b/layout/style/nsMediaFeatures.cpp
+@@ -148,6 +148,11 @@ StyleColorGamut Gecko_MediaFeatures_Colo
+   if (!dx || aDocument->ShouldResistFingerprinting(RFPTarget::CSSColorInfo)) {
+     return StyleColorGamut::Srgb;
+   }
++  if (StaticPrefs::gfx_color_management_hdr_force_enabled() ||
++      (StaticPrefs::gfx_color_management_hdr() && gfx::gfxVars::VideoHDR() &&
++       dx->GetScreenIsHDR())) {
++    return StyleColorGamut::Rec2020;
++  }
+   switch (dx->GetColorGamut()) {
+     case dom::ScreenColorGamut::Srgb:
+       return StyleColorGamut::Srgb;
+@@ -360,21 +365,11 @@ StyleScripting Gecko_MediaFeatures_Scrip
+                                 : StyleScripting::None;
+ }
+ 
+-StyleDynamicRange Gecko_MediaFeatures_DynamicRange(const Document* aDocument) {
+-  // Bug 1759772: Once HDR color is available, update each platform
+-  // LookAndFeel implementation to return StyleDynamicRange::High when
+-  // appropriate.
+-  return StyleDynamicRange::Standard;
+-}
+-
+-StyleDynamicRange Gecko_MediaFeatures_VideoDynamicRange(
++static StyleDynamicRange GetHDRDynamicRangeForDocument(
+     const Document* aDocument) {
+   if (aDocument->ShouldResistFingerprinting(RFPTarget::CSSVideoDynamicRange)) {
+     return StyleDynamicRange::Standard;
+   }
+-  // Usually compositors can process HDR content even without HDR displays.
+-  //
+-  // This parallels logic in gfxPlatform::UseHDR().
+   if (StaticPrefs::gfx_color_management_hdr_force_enabled()) {
+     return StyleDynamicRange::High;
+   }
+@@ -395,6 +392,15 @@ StyleDynamicRange Gecko_MediaFeatures_Vi
+ 
+   return StyleDynamicRange::Standard;
+ }
++
++StyleDynamicRange Gecko_MediaFeatures_DynamicRange(const Document* aDocument) {
++  return GetHDRDynamicRangeForDocument(aDocument);
++}
++
++StyleDynamicRange Gecko_MediaFeatures_VideoDynamicRange(
++    const Document* aDocument) {
++  return GetHDRDynamicRangeForDocument(aDocument);
++}
+ 
+ static PointerCapabilities GetPointerCapabilities(const Document* aDocument,
+                                                   LookAndFeel::IntID aID) {

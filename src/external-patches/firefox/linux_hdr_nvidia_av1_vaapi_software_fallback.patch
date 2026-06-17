@@ -1,0 +1,20 @@
+diff --git a/dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp b/dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp
+--- a/dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp
++++ b/dom/media/platforms/ffmpeg/FFmpegVideoDecoder.cpp
+@@ -316,6 +316,16 @@ void FFmpegVideoDecoder<LIBAV_VER>::AdjustHWDecodeLogging() {
+ MediaResult FFmpegVideoDecoder<LIBAV_VER>::InitVAAPIDecoder() {
+   FFMPEG_LOG("Initialising VA-API FFmpeg decoder");
+ 
++  const char* vaDriver = getenv("LIBVA_DRIVER_NAME");
++  if (mCodecID == AV_CODEC_ID_AV1 &&
++      !getenv("ZEN_HDR_ALLOW_NVIDIA_AV1_VAAPI")) {
++    FFMPEG_LOG(
++        "  disabling AV1 VA-API decoder; using software fallback "
++        "(LIBVA_DRIVER_NAME=%s)",
++        vaDriver ? vaDriver : "(unset)");
++    return NS_ERROR_NOT_AVAILABLE;
++  }
++
+   StaticMutexAutoLock mon(sMutex);
+ 
+   // mAcceleratedFormats is already configured so check supported

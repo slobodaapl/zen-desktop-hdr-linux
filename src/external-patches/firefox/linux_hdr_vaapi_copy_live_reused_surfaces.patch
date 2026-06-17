@@ -1,0 +1,61 @@
+diff --git a/dom/media/platforms/ffmpeg/FFmpegVideoFramePool.h b/dom/media/platforms/ffmpeg/FFmpegVideoFramePool.h
+--- a/dom/media/platforms/ffmpeg/FFmpegVideoFramePool.h
++++ b/dom/media/platforms/ffmpeg/FFmpegVideoFramePool.h
+@@ -150,6 +150,8 @@ class VideoFramePool final {
+       bool aRecycleSurface);
+   RefPtr<VideoFrameSurface<LIBAV_VER>> GetFFmpegVideoFrameSurfaceLocked(
+       const MutexAutoLock& aProofOfLock, VASurfaceID aFFMPEGSurfaceID);
++  bool IsFFmpegVideoFrameSurfaceUsedByRendererLocked(
++      const MutexAutoLock& aProofOfLock, VASurfaceID aFFMPEGSurfaceID);
+   RefPtr<VideoFrameSurface<LIBAV_VER>> GetFreeVideoFrameSurfaceLocked(
+       const MutexAutoLock& aProofOfLock);
+   bool ShouldCopySurface();
+diff --git a/dom/media/platforms/ffmpeg/FFmpegVideoFramePool.cpp b/dom/media/platforms/ffmpeg/FFmpegVideoFramePool.cpp
+--- a/dom/media/platforms/ffmpeg/FFmpegVideoFramePool.cpp
++++ b/dom/media/platforms/ffmpeg/FFmpegVideoFramePool.cpp
+@@ -191,6 +191,22 @@ VideoFramePool<LIBAV_VER>::GetFFmpegVideoFrameSurfaceLocked(
+   return nullptr;
+ }
+ 
++bool VideoFramePool<LIBAV_VER>::IsFFmpegVideoFrameSurfaceUsedByRendererLocked(
++    const MutexAutoLock& aProofOfLock, VASurfaceID aFFMPEGSurfaceID) {
++  MOZ_DIAGNOSTIC_ASSERT(
++      aFFMPEGSurfaceID != sInvalidFFMPEGSurfaceID,
++      "IsFFmpegVideoFrameSurfaceUsedByRendererLocked(): expects valid "
++      "aFFMPEGSurfaceID");
++
++  for (const auto& surface : mDMABufSurfaces) {
++    if (surface->mFFMPEGSurfaceID == aFFMPEGSurfaceID &&
++        surface->IsUsedByRenderer()) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ RefPtr<VideoFrameSurface<LIBAV_VER>>
+ VideoFramePool<LIBAV_VER>::GetFreeVideoFrameSurfaceLocked(
+     const MutexAutoLock& aProofOfLock) {
+@@ -297,13 +313,20 @@ VideoFramePool<LIBAV_VER>::GetVideoFrameSurface(
+ 
+   MutexAutoLock lock(mSurfaceLock);
+ 
+-  bool copySurface = mTextureCopyWorks && ShouldCopySurface();
+-
+   VASurfaceID ffmpegSurfaceID = (uintptr_t)aAVFrame->data[3];
+   MOZ_DIAGNOSTIC_ASSERT(ffmpegSurfaceID != sInvalidFFMPEGSurfaceID,
+                         "Exported invalid FFmpeg surface ID");
+   DMABUF_LOG("Got VA-API DMABufSurface FFMPEG ID 0x%x", ffmpegSurfaceID);
+ 
++  bool copySurface = mTextureCopyWorks && ShouldCopySurface();
++  if (!copySurface && mTextureCopyWorks &&
++      IsFFmpegVideoFrameSurfaceUsedByRendererLocked(lock, ffmpegSurfaceID)) {
++    DMABUF_LOG(
++        "FFmpeg surface 0x%x is still used by renderer, copying frame",
++        ffmpegSurfaceID);
++    copySurface = true;
++  }
++
+   RefPtr<VideoFrameSurface<LIBAV_VER>> videoSurface =
+       GetTargetVideoFrameSurfaceLocked(lock, ffmpegSurfaceID,
+                                        /* aRecycleSurface */ !copySurface);

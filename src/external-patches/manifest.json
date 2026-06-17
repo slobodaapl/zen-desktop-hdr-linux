@@ -46,6 +46,58 @@
   },
   {
     "type": "local",
+    "path": "firefox/wayland_hdr_set_luminances.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_web_caps.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_force_dmabuf_external_composition.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_block_wide_yuv_external_composition.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_force_nonroot_yuv_underlay.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_wayland_rgb10_render_surface.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_wayland_rgb10_export_surface.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_vaapi_sync_before_dmabuf_export.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_nvidia_av1_vaapi_software_fallback.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_dmabuf_yuv_recreate_textures_on_descriptor_change.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_vaapi_copy_live_reused_surfaces.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_composited_dmabuf_copy_lock.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_dmabuf_yuv_release_textures_after_unlock.patch"
+  },
+  {
+    "type": "local",
     "path": "firefox/no_liquid_glass_icon.patch"
   },
   {

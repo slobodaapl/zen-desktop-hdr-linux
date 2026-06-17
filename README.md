@@ -6,13 +6,20 @@
 <!-- TODO: Get a job -->
 <img src="./docs/assets/zen-dark.svg" width="100px" align="left">
 
-### `Zen Browser`
+### `Zen Browser HDR Fork`
 
 [![Downloads](https://img.shields.io/github/downloads/zen-browser/desktop/total.svg)](https://github.com/zen-browser/desktop/releases)
 [![Crowdin](https://badges.crowdin.net/zen-browser/localized.svg)](https://crowdin.com/project/zen-browser)
 [![Zen Release builds](https://github.com/zen-browser/desktop/actions/workflows/build.yml/badge.svg?branch=stable)](https://github.com/zen-browser/desktop/actions/workflows/build.yml)
 
-Zen is a firefox-based browser with the aim of pushing your productivity to a new level!
+This repository is a fork of Zen Browser with added Linux Wayland HDR support.
+
+HDR support has only been tested on NVIDIA so far. On NVIDIA, VP9 should be
+enabled and AV1 disabled for now because the AV1 hardware decode path has bad
+HDR playback behavior in this setup.
+
+Upstream Zen is a firefox-based browser with the aim of pushing your productivity
+to a new level!
 
 <div flex="true">
   <a href="https://zen-browser.app/download">

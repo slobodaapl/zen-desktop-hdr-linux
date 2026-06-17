@@ -1,0 +1,485 @@
+diff --git a/gfx/layers/NativeLayer.h b/gfx/layers/NativeLayer.h
+--- a/gfx/layers/NativeLayer.h
++++ b/gfx/layers/NativeLayer.h
+@@ -253,6 +253,10 @@ class NativeLayer {
+ 
+   virtual void AttachExternalImage(wr::RenderTextureHost* aExternalImage) = 0;
+ 
++  // Mark compositor-owned render surfaces whose content should be presented
++  // with HDR output metadata.
++  virtual void SetIsHDR(bool aIsHDR) {}
++
+   virtual GpuFence* GetGpuFence() = 0;
+ 
+  protected:
+diff --git a/gfx/layers/NativeLayerWayland.cpp b/gfx/layers/NativeLayerWayland.cpp
+--- a/gfx/layers/NativeLayerWayland.cpp
++++ b/gfx/layers/NativeLayerWayland.cpp
+@@ -27,6 +27,7 @@
+ #include <utility>
+ #include <algorithm>
+ 
++#include "gfxPlatform.h"
+ #include "gfxUtils.h"
+ #include "nsGtkUtils.h"
+ #include "GLContextProvider.h"
+@@ -120,13 +121,23 @@ void NativeLayerRootWayland::Init() {
+     RefPtr<DMABufFormats> formats = WaylandDisplayGet()->GetDMABufFormats();
+     DRMFormat* format = nullptr;
+     if (formats) {
+-      if (!(format = formats->GetFormat(GBM_FORMAT_ARGB8888,
++      auto getFormat = [&](uint32_t aFormat) -> DRMFormat* {
++        if (DRMFormat* scanoutFormat =
++                formats->GetFormat(aFormat, /* aScanoutFormat */ true)) {
++          return scanoutFormat;
++        }
++        return formats->GetFormat(aFormat, /* aScanoutFormat */ false);
++      };
++      if (gfxPlatform::UseHDR()) {
++        format = getFormat(GBM_FORMAT_ARGB2101010);
++      }
++      if (!format &&
++          !(format = formats->GetFormat(GBM_FORMAT_ARGB8888,
+                                         /* aScanoutFormat */ true))) {
+         LOGVERBOSE(
+             "NativeLayerRootWayland::Init() missing scanout format, use global "
+             "one");
+-        format = formats->GetFormat(GBM_FORMAT_ARGB8888,
+-                                    /* aScanoutFormat */ false);
++        format = getFormat(GBM_FORMAT_ARGB8888);
+       }
+     }
+     if (!format) {
+@@ -959,14 +970,19 @@ bool NativeLayerWayland::Map(WaylandSurfaceLock* aParentWaylandSurfaceLock) {
+       },
+       /* aEmulateFrameCallback */ true);
+ 
++  bool setColorRepresentation = false;
++  gfx::YUVColorSpace colorRepresentationSpace = gfx::YUVColorSpace::BT2020;
++  bool colorRepresentationFullRange = false;
++  uint32_t colorRepresentationChromaLocation = 0;
++
+   if (mIsHDR) {
+-    gfx::YUVColorSpace yuvColorSpace = gfx::YUVColorSpace::BT709;
+-    gfx::TransferFunction transferFunction = gfx::TransferFunction::BT709;
++    gfx::YUVColorSpace yuvColorSpace = gfx::YUVColorSpace::BT2020;
++    gfx::TransferFunction transferFunction = gfx::TransferFunction::PQ;
+     if (auto* external = AsNativeLayerWaylandExternal()) {
+       if (RefPtr surface = external->GetSurface()) {
+         if (auto* surfaceYUV = surface->GetAsDMABufSurfaceYUV()) {
+           yuvColorSpace = surfaceYUV->GetYUVColorSpace();
+           transferFunction = surfaceYUV->GetTransferFunction();
+         }
+       }
+     }
+@@ -977,12 +997,18 @@ bool NativeLayerWayland::Map(WaylandSurfaceLock* aParentWaylandSurfaceLock) {
+   if (auto* external = AsNativeLayerWaylandExternal()) {
+     if (RefPtr surface = external->GetSurface()) {
+       if (auto* surfaceYUV = surface->GetAsDMABufSurfaceYUV()) {
+-        mSurface->SetColorRepresentationLocked(
+-            surfaceLock, surfaceYUV->GetYUVColorSpace(),
+-            surfaceYUV->IsFullRange(), surfaceYUV->GetWPChromaLocation());
++        colorRepresentationSpace = surfaceYUV->GetYUVColorSpace();
++        colorRepresentationFullRange = surfaceYUV->IsFullRange();
++        colorRepresentationChromaLocation = surfaceYUV->GetWPChromaLocation();
++        setColorRepresentation = true;
+       }
+     }
+   }
++  if (setColorRepresentation) {
++    mSurface->SetColorRepresentationLocked(
++        surfaceLock, colorRepresentationSpace, colorRepresentationFullRange,
++        colorRepresentationChromaLocation);
++  }
+ 
+   mNeedsMainThreadUpdate = MainThreadUpdate::Map;
+   mState.mMutatedStackingOrder = true;
+diff --git a/gfx/layers/NativeLayerWayland.h b/gfx/layers/NativeLayerWayland.h
+--- a/gfx/layers/NativeLayerWayland.h
++++ b/gfx/layers/NativeLayerWayland.h
+@@ -213,6 +213,7 @@ class NativeLayerWayland : public NativeLayer {
+   gfx::IntRect CurrentSurfaceDisplayRect() override;
+   void SetSurfaceIsFlipped(bool aIsFlipped) override;
+   bool SurfaceIsFlipped() override;
++  void SetIsHDR(bool aIsHDR) override { mIsHDR = aIsHDR; }
+ 
+   void RenderLayer(double aScale);
+   // TODO
+diff --git a/gfx/webrender_bindings/DCLayerTree.cpp b/gfx/webrender_bindings/DCLayerTree.cpp
+--- a/gfx/webrender_bindings/DCLayerTree.cpp
++++ b/gfx/webrender_bindings/DCLayerTree.cpp
+@@ -767,7 +767,8 @@ void DCLayerTree::Unbind() {
+ 
+ void DCLayerTree::CreateSurface(wr::NativeSurfaceId aId,
+                                 wr::DeviceIntPoint aVirtualOffset,
+-                                wr::DeviceIntSize aTileSize, bool aIsOpaque) {
++                                wr::DeviceIntSize aTileSize, bool aIsOpaque,
++                                bool aIsHDR) {
+   MOZ_ASSERT_UNREACHABLE("Unexpected to be called!");
+ }
+ 
+diff --git a/gfx/webrender_bindings/DCLayerTree.h b/gfx/webrender_bindings/DCLayerTree.h
+--- a/gfx/webrender_bindings/DCLayerTree.h
++++ b/gfx/webrender_bindings/DCLayerTree.h
+@@ -151,7 +151,8 @@ class DCLayerTree {
+             wr::DeviceIntRect aDirtyRect, wr::DeviceIntRect aValidRect);
+   void Unbind();
+   void CreateSurface(wr::NativeSurfaceId aId, wr::DeviceIntPoint aVirtualOffset,
+-                     wr::DeviceIntSize aTileSize, bool aIsOpaque);
++                     wr::DeviceIntSize aTileSize, bool aIsOpaque,
++                     bool aIsHDR);
+   void CreateSwapChainSurface(wr::NativeSurfaceId aId, wr::DeviceIntSize aSize,
+                               bool aIsOpaque, bool aNeedsSyncDcompCommit);
+   void ResizeSwapChainSurface(wr::NativeSurfaceId aId, wr::DeviceIntSize aSize);
+diff --git a/gfx/webrender_bindings/RenderCompositor.cpp b/gfx/webrender_bindings/RenderCompositor.cpp
+--- a/gfx/webrender_bindings/RenderCompositor.cpp
++++ b/gfx/webrender_bindings/RenderCompositor.cpp
+@@ -62,9 +62,11 @@ void wr_compositor_bind(void* aCompositor, wr::NativeTileId aId,
+ 
+ void wr_compositor_create_surface(void* aCompositor, wr::NativeSurfaceId aId,
+                                   wr::DeviceIntPoint aVirtualOffset,
+-                                  wr::DeviceIntSize aTileSize, bool aIsOpaque) {
++                                  wr::DeviceIntSize aTileSize, bool aIsOpaque,
++                                  bool aIsHDR) {
+   RenderCompositor* compositor = static_cast<RenderCompositor*>(aCompositor);
+-  compositor->CreateSurface(aId, aVirtualOffset, aTileSize, aIsOpaque);
++  compositor->CreateSurface(aId, aVirtualOffset, aTileSize, aIsOpaque,
++                            aIsHDR);
+ }
+ 
+ void wr_compositor_create_external_surface(void* aCompositor,
+diff --git a/gfx/webrender_bindings/RenderCompositor.h b/gfx/webrender_bindings/RenderCompositor.h
+--- a/gfx/webrender_bindings/RenderCompositor.h
++++ b/gfx/webrender_bindings/RenderCompositor.h
+@@ -145,7 +145,8 @@ class RenderCompositor {
+   virtual void UnmapTile() {}
+   virtual void CreateSurface(wr::NativeSurfaceId aId,
+                              wr::DeviceIntPoint aVirtualOffset,
+-                             wr::DeviceIntSize aTileSize, bool aIsOpaque) {}
++                             wr::DeviceIntSize aTileSize, bool aIsOpaque,
++                             bool aIsHDR) {}
+   virtual void CreateSwapChainSurface(wr::NativeSurfaceId aId,
+                                       wr::DeviceIntSize aSize, bool aIsOpaque,
+                                       bool aNeedsSyncDcompCommit) {}
+diff --git a/gfx/webrender_bindings/RenderCompositorANGLE.cpp b/gfx/webrender_bindings/RenderCompositorANGLE.cpp
+--- a/gfx/webrender_bindings/RenderCompositorANGLE.cpp
++++ b/gfx/webrender_bindings/RenderCompositorANGLE.cpp
+@@ -866,8 +866,9 @@ void RenderCompositorANGLE::PresentSwapChain(
+ void RenderCompositorANGLE::CreateSurface(wr::NativeSurfaceId aId,
+                                           wr::DeviceIntPoint aVirtualOffset,
+                                           wr::DeviceIntSize aTileSize,
+-                                          bool aIsOpaque) {
+-  mDCLayerTree->CreateSurface(aId, aVirtualOffset, aTileSize, aIsOpaque);
++                                          bool aIsOpaque, bool aIsHDR) {
++  mDCLayerTree->CreateSurface(aId, aVirtualOffset, aTileSize, aIsOpaque,
++                              aIsHDR);
+ }
+ 
+ void RenderCompositorANGLE::CreateSwapChainSurface(wr::NativeSurfaceId aId,
+diff --git a/gfx/webrender_bindings/RenderCompositorANGLE.h b/gfx/webrender_bindings/RenderCompositorANGLE.h
+index cbce7e0761..c1c864c19d 100644
+--- a/gfx/webrender_bindings/RenderCompositorANGLE.h
++++ b/gfx/webrender_bindings/RenderCompositorANGLE.h
+@@ -100,3 +100,4 @@ class RenderCompositorANGLE final : public RenderCompositor {
+   void CreateSurface(wr::NativeSurfaceId aId, wr::DeviceIntPoint aVirtualOffset,
+-                     wr::DeviceIntSize aTileSize, bool aIsOpaque) override;
++                     wr::DeviceIntSize aTileSize, bool aIsOpaque,
++                     bool aIsHDR) override;
+   void CreateExternalSurface(wr::NativeSurfaceId aId, bool aIsOpaque) override;
+diff --git a/gfx/webrender_bindings/RenderCompositorLayerNative.cpp b/gfx/webrender_bindings/RenderCompositorLayerNative.cpp
+--- a/gfx/webrender_bindings/RenderCompositorLayerNative.cpp
++++ b/gfx/webrender_bindings/RenderCompositorLayerNative.cpp
+@@ -289,7 +289,7 @@ void RenderCompositorLayerNative::UnbindNativeLayer() {
+ 
+ void RenderCompositorLayerNative::CreateSurface(
+     wr::NativeSurfaceId aId, wr::DeviceIntPoint aVirtualOffset,
+-    wr::DeviceIntSize aTileSize, bool aIsOpaque) {
++    wr::DeviceIntSize aTileSize, bool aIsOpaque, bool aIsHDR) {
+   MOZ_ASSERT_UNREACHABLE("Unexpected to be called!");
+ }
+ 
+diff --git a/gfx/webrender_bindings/RenderCompositorLayerNative.h b/gfx/webrender_bindings/RenderCompositorLayerNative.h
+index f23590facf..433d6d4c4d 100644
+--- a/gfx/webrender_bindings/RenderCompositorLayerNative.h
++++ b/gfx/webrender_bindings/RenderCompositorLayerNative.h
+@@ -68,3 +68,4 @@ class RenderCompositorLayerNative : public RenderCompositor {
+   void CreateSurface(wr::NativeSurfaceId aId, wr::DeviceIntPoint aVirtualOffset,
+-                     wr::DeviceIntSize aTileSize, bool aIsOpaque) override;
++                     wr::DeviceIntSize aTileSize, bool aIsOpaque,
++                     bool aIsHDR) override;
+   void CreateExternalSurface(wr::NativeSurfaceId aId, bool aIsOpaque) override;
+diff --git a/gfx/webrender_bindings/RenderCompositorLayersSWGL.cpp b/gfx/webrender_bindings/RenderCompositorLayersSWGL.cpp
+--- a/gfx/webrender_bindings/RenderCompositorLayersSWGL.cpp
++++ b/gfx/webrender_bindings/RenderCompositorLayersSWGL.cpp
+@@ -227,7 +227,7 @@ void RenderCompositorLayersSWGL::Unbind() {
+ 
+ void RenderCompositorLayersSWGL::CreateSurface(
+     wr::NativeSurfaceId aId, wr::DeviceIntPoint aVirtualOffset,
+-    wr::DeviceIntSize aTileSize, bool aIsOpaque) {
++    wr::DeviceIntSize aTileSize, bool aIsOpaque, bool aIsHDR) {
+   MOZ_RELEASE_ASSERT(mSurfaces.find(aId) == mSurfaces.end());
+   auto surface = DoCreateSurface(aTileSize, aIsOpaque);
+   mSurfaces.insert({aId, std::move(surface)});
+diff --git a/gfx/webrender_bindings/RenderCompositorLayersSWGL.h b/gfx/webrender_bindings/RenderCompositorLayersSWGL.h
+index 76f10e1233..39fe874936 100644
+--- a/gfx/webrender_bindings/RenderCompositorLayersSWGL.h
++++ b/gfx/webrender_bindings/RenderCompositorLayersSWGL.h
+@@ -69,3 +69,4 @@ class RenderCompositorLayersSWGL : public RenderCompositor {
+   void CreateSurface(wr::NativeSurfaceId aId, wr::DeviceIntPoint aVirtualOffset,
+-                     wr::DeviceIntSize aTileSize, bool aIsOpaque) override;
++                     wr::DeviceIntSize aTileSize, bool aIsOpaque,
++                     bool aIsHDR) override;
+   void CreateExternalSurface(wr::NativeSurfaceId aId, bool aIsOpaque) override;
+diff --git a/gfx/webrender_bindings/RenderCompositorNative.cpp b/gfx/webrender_bindings/RenderCompositorNative.cpp
+--- a/gfx/webrender_bindings/RenderCompositorNative.cpp
++++ b/gfx/webrender_bindings/RenderCompositorNative.cpp
+@@ -136,8 +136,8 @@ void RenderCompositorNative::GetCompositorCapabilities(
+ RenderCompositorNative::Surface::~Surface() = default;
+ 
+ RenderCompositorNative::Surface::Surface(wr::DeviceIntSize aTileSize,
+-                                         bool aIsOpaque)
+-    : mTileSize(aTileSize), mIsOpaque(aIsOpaque) {}
++                                         bool aIsOpaque, bool aIsHDR)
++    : mTileSize(aTileSize), mIsOpaque(aIsOpaque), mIsHDR(aIsHDR) {}
+ 
+ bool RenderCompositorNative::MaybeReadback(
+     const gfx::IntSize& aReadbackSize, const wr::ImageFormat& aReadbackFormat,
+@@ -316,9 +316,9 @@ void RenderCompositorNative::UnbindNativeLayer() {
+ void RenderCompositorNative::CreateSurface(wr::NativeSurfaceId aId,
+                                            wr::DeviceIntPoint aVirtualOffset,
+                                            wr::DeviceIntSize aTileSize,
+-                                           bool aIsOpaque) {
++                                           bool aIsOpaque, bool aIsHDR) {
+   MOZ_RELEASE_ASSERT(mSurfaces.find(aId) == mSurfaces.end());
+-  mSurfaces.insert({aId, Surface{aTileSize, aIsOpaque}});
++  mSurfaces.insert({aId, Surface{aTileSize, aIsOpaque, aIsHDR}});
+ }
+ 
+ void RenderCompositorNative::CreateExternalSurface(wr::NativeSurfaceId aId,
+@@ -400,6 +400,7 @@ void RenderCompositorNative::CreateTile(wr::NativeSurfaceId aId, int aX,
+ 
+   RefPtr<layers::NativeLayer> layer = mNativeLayerRoot->CreateLayer(
+       surface.TileSize(), surface.mIsOpaque, mSurfacePoolHandle);
++  layer->SetIsHDR(surface.mIsHDR);
+   surface.mNativeLayers.insert({TileKey(aX, aY), layer});
+   mTotalTilePixelCount += gfx::IntRect({}, layer->GetSize()).Area();
+ }
+diff --git a/gfx/webrender_bindings/RenderCompositorNative.h b/gfx/webrender_bindings/RenderCompositorNative.h
+--- a/gfx/webrender_bindings/RenderCompositorNative.h
++++ b/gfx/webrender_bindings/RenderCompositorNative.h
+@@ -63,7 +63,8 @@ class RenderCompositorNative : public RenderCompositor {
+   void CompositorBeginFrame() override;
+   void CompositorEndFrame() override;
+   void CreateSurface(wr::NativeSurfaceId aId, wr::DeviceIntPoint aVirtualOffset,
+-                     wr::DeviceIntSize aTileSize, bool aIsOpaque) override;
++                     wr::DeviceIntSize aTileSize, bool aIsOpaque,
++                     bool aIsHDR) override;
+   void CreateExternalSurface(wr::NativeSurfaceId aId, bool aIsOpaque) override;
+   void CreateBackdropSurface(wr::NativeSurfaceId aId,
+                              wr::ColorF aColor) override;
+@@ -112,7 +113,7 @@ class RenderCompositorNative : public RenderCompositor {
+   };
+ 
+   struct Surface {
+-    Surface(wr::DeviceIntSize aTileSize, bool aIsOpaque);
++    Surface(wr::DeviceIntSize aTileSize, bool aIsOpaque, bool aIsHDR = false);
+     ~Surface();
+ 
+     gfx::IntSize TileSize() const {
+@@ -124,6 +125,7 @@ class RenderCompositorNative : public RenderCompositor {
+     // is true.
+     wr::DeviceIntSize mTileSize;
+     bool mIsOpaque;
++    bool mIsHDR;
+     bool mIsExternal = false;
+     std::unordered_map<TileKey, RefPtr<layers::NativeLayer>, TileKeyHashFn>
+         mNativeLayers;
+diff --git a/gfx/webrender_bindings/src/bindings.rs b/gfx/webrender_bindings/src/bindings.rs
+--- a/gfx/webrender_bindings/src/bindings.rs
++++ b/gfx/webrender_bindings/src/bindings.rs
+@@ -1281,6 +1281,7 @@ extern "C" {
+         virtual_offset: DeviceIntPoint,
+         tile_size: DeviceIntSize,
+         is_opaque: bool,
++        is_hdr: bool,
+     );
+     fn wr_compositor_create_swapchain_surface(
+         compositor: *mut c_void,
+@@ -1371,9 +1372,17 @@ impl Compositor for WrCompositor {
+         virtual_offset: DeviceIntPoint,
+         tile_size: DeviceIntSize,
+         is_opaque: bool,
++        is_hdr: bool,
+     ) {
+         unsafe {
+-            wr_compositor_create_surface(self.0, id, virtual_offset, tile_size, is_opaque);
++            wr_compositor_create_surface(
++                self.0,
++                id,
++                virtual_offset,
++                tile_size,
++                is_opaque,
++                is_hdr,
++            );
+         }
+     }
+ 
+diff --git a/gfx/wr/webrender/src/composite.rs b/gfx/wr/webrender/src/composite.rs
+--- a/gfx/wr/webrender/src/composite.rs
++++ b/gfx/wr/webrender/src/composite.rs
+@@ -61,6 +61,7 @@ pub enum NativeSurfaceOperationDetails {
+         virtual_offset: DeviceIntPoint,
+         tile_size: DeviceIntSize,
+         is_opaque: bool,
++        is_hdr: bool,
+     },
+     CreateExternalSurface {
+         id: NativeSurfaceId,
+@@ -1483,6 +1484,7 @@ pub trait Compositor {
+         virtual_offset: DeviceIntPoint,
+         tile_size: DeviceIntSize,
+         is_opaque: bool,
++        is_hdr: bool,
+     );
+ 
+     /// Create a new OS compositor surface that can be used with an
+diff --git a/gfx/wr/webrender/src/compositor/sw_compositor.rs b/gfx/wr/webrender/src/compositor/sw_compositor.rs
+--- a/gfx/wr/webrender/src/compositor/sw_compositor.rs
++++ b/gfx/wr/webrender/src/compositor/sw_compositor.rs
+@@ -1628,9 +1628,17 @@ impl Compositor for SwCompositor {
+         virtual_offset: DeviceIntPoint,
+         tile_size: DeviceIntSize,
+         is_opaque: bool,
++        is_hdr: bool,
+     ) {
+         if self.use_native_compositor {
+-            self.compositor.create_surface(device, id, virtual_offset, tile_size, is_opaque);
++            self.compositor.create_surface(
++                device,
++                id,
++                virtual_offset,
++                tile_size,
++                is_opaque,
++                is_hdr,
++            );
+         }
+         self.max_tile_size = DeviceIntSize::new(
+             self.max_tile_size.width.max(tile_size.width),
+diff --git a/gfx/wr/webrender/src/picture.rs b/gfx/wr/webrender/src/picture.rs
+--- a/gfx/wr/webrender/src/picture.rs
++++ b/gfx/wr/webrender/src/picture.rs
+@@ -1773,6 +1773,7 @@ impl TileCacheInstance {
+                                             tile_cache.virtual_offset,
+                                             tile_cache.current_tile_size,
+                                             true,
++                                            false,
+                                         );
+ 
+                                     let alpha = frame_state
+@@ -1781,6 +1782,7 @@ impl TileCacheInstance {
+                                             tile_cache.virtual_offset,
+                                             tile_cache.current_tile_size,
+                                             false,
++                                            false,
+                                         );
+ 
+                                     sub_slice.native_surface = Some(NativeSurface {
+diff --git a/gfx/wr/webrender/src/renderer/mod.rs b/gfx/wr/webrender/src/renderer/mod.rs
+--- a/gfx/wr/webrender/src/renderer/mod.rs
++++ b/gfx/wr/webrender/src/renderer/mod.rs
+@@ -1444,6 +1444,7 @@ impl Renderer {
+                     DeviceIntPoint::zero(),
+                     framebuffer_size,
+                     false,
++                    false,
+                 );
+                 compositor.create_tile(
+                     &mut self.device,
+@@ -3682,7 +3683,7 @@ impl Renderer {
+             CompositorConfig::Native { ref mut compositor, .. } => {
+                 for op in self.pending_native_surface_updates.drain(..) {
+                     match op.details {
+-                        NativeSurfaceOperationDetails::CreateSurface { id, virtual_offset, tile_size, is_opaque } => {
++                        NativeSurfaceOperationDetails::CreateSurface { id, virtual_offset, tile_size, is_opaque, is_hdr } => {
+                             let _inserted = self.allocated_native_surfaces.insert(id);
+                             debug_assert!(_inserted, "bug: creating existing surface");
+                             compositor.create_surface(
+@@ -3691,6 +3692,7 @@ impl Renderer {
+                                     virtual_offset,
+                                     tile_size,
+                                     is_opaque,
++                                    is_hdr,
+                             );
+                         }
+                         NativeSurfaceOperationDetails::CreateExternalSurface { id, is_opaque } => {
+diff --git a/gfx/wr/webrender/src/resource_cache.rs b/gfx/wr/webrender/src/resource_cache.rs
+--- a/gfx/wr/webrender/src/resource_cache.rs
++++ b/gfx/wr/webrender/src/resource_cache.rs
+@@ -1735,6 +1735,7 @@ impl ResourceCache {
+         virtual_offset: DeviceIntPoint,
+         tile_size: DeviceIntSize,
+         is_opaque: bool,
++        is_hdr: bool,
+     ) -> NativeSurfaceId {
+         let id = NativeSurfaceId(NEXT_NATIVE_SURFACE_ID.fetch_add(1, Ordering::Relaxed) as u64);
+ 
+@@ -1745,6 +1746,7 @@ impl ResourceCache {
+                     virtual_offset,
+                     tile_size,
+                     is_opaque,
++                    is_hdr,
+                 },
+             }
+         );
+diff --git a/gfx/wr/webrender/src/tile_cache/mod.rs b/gfx/wr/webrender/src/tile_cache/mod.rs
+--- a/gfx/wr/webrender/src/tile_cache/mod.rs
++++ b/gfx/wr/webrender/src/tile_cache/mod.rs
+@@ -1946,6 +1946,14 @@ impl TileCacheInstance {
+             }
+             CompositorKind::Native { .. } => {
+                 let native_surface_size = surface_size.to_i32();
++                let is_hdr_native_surface = external_image_id.is_none() &&
++                    matches!(
++                        &dependency,
++                        ExternalSurfaceDependency::Yuv {
++                            channel_bit_depth,
++                            ..
++                        } if *channel_bit_depth > 8
++                    );
+ 
+                 let key = ExternalNativeSurfaceKey {
+                     image_keys: *api_keys,
+@@ -1970,6 +1978,7 @@ impl TileCacheInstance {
+                                     DeviceIntPoint::zero(),
+                                     native_surface_size,
+                                     is_opaque,
++                                    is_hdr_native_surface,
+                                 );
+ 
+                                 let tile_id = NativeTileId {
+diff --git a/gfx/layers/NativeLayerWayland.cpp b/gfx/layers/NativeLayerWayland.cpp
+--- a/gfx/layers/NativeLayerWayland.cpp
++++ b/gfx/layers/NativeLayerWayland.cpp
+@@ -143,4 +143,6 @@ void NativeLayerRootWayland::Init() {
+       format = new DRMFormat(GBM_FORMAT_ARGB8888);
+     }
++    LOG("NativeLayerRootWayland::Init() selected DRM format 0x%08x HDR %d",
++        format->GetFormat(), gfxPlatform::UseHDR());
+     SetDRMFormat(format);
+   }
+diff --git a/widget/gtk/WaylandBuffer.cpp b/widget/gtk/WaylandBuffer.cpp
+--- a/widget/gtk/WaylandBuffer.cpp
++++ b/widget/gtk/WaylandBuffer.cpp
+@@ -247,8 +247,9 @@ already_AddRefed<WaylandBufferDMABUF> WaylandBufferDMABUF::CreateRGBA(
+     return nullptr;
+   }
+ 
+-  LOGWAYLAND("WaylandBufferDMABUF::CreateRGBA() [%p] UID %d [%d x %d]",
+-             (void*)buffer, buffer->mDMABufSurface->GetUID(), aSize.width,
+-             aSize.height);
++  LOGWAYLAND(
++      "WaylandBufferDMABUF::CreateRGBA() [%p] UID %d [%d x %d] format 0x%08x",
++      (void*)buffer, buffer->mDMABufSurface->GetUID(), aSize.width,
++      aSize.height, aFormat ? aFormat->GetFormat() : 0);
+   return buffer.forget();
+ }

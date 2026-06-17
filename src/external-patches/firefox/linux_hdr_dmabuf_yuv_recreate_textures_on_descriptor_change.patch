@@ -1,0 +1,76 @@
+diff --git a/widget/gtk/DMABufSurface.cpp b/widget/gtk/DMABufSurface.cpp
+--- a/widget/gtk/DMABufSurface.cpp
++++ b/widget/gtk/DMABufSurface.cpp
+@@ -15,6 +15,7 @@
+ #include <sys/time.h>
+ #include <dlfcn.h>
+ #include <sys/mman.h>
++#include <sys/stat.h>
+ #ifdef HAVE_EVENTFD
+ #  include <sys/eventfd.h>
+ #endif
+@@ -1701,6 +1702,52 @@ bool DMABufSurfaceYUV::ImportPRIMESurfaceDescriptor(
+ 
+ bool DMABufSurfaceYUV::MoveYUVDataImpl(const VADRMPRIMESurfaceDescriptor& aDesc,
+                                        int aWidth, int aHeight) {
++  auto matchesCurrentDescriptor = [&]() {
++    if (mFOURCCFormat != static_cast<int32_t>(aDesc.fourcc) ||
++        mBufferPlaneCount != static_cast<int>(aDesc.num_layers)) {
++      return false;
++    }
++
++    for (unsigned int i = 0; i < aDesc.num_layers; i++) {
++      unsigned int object = aDesc.layers[i].object_index[0];
++      if (object >= aDesc.num_objects) {
++        return false;
++      }
++
++      struct stat currentStat;
++      struct stat incomingStat;
++      if (!mDmabufFds[i] ||
++          fstat(mDmabufFds[i]->GetHandle(), &currentStat) != 0 ||
++          fstat(aDesc.objects[object].fd, &incomingStat) != 0 ||
++          currentStat.st_dev != incomingStat.st_dev ||
++          currentStat.st_ino != incomingStat.st_ino) {
++        return false;
++      }
++
++      int subsample = i == 0 ? 0 : 1;
++      if (mBufferModifiers[i] != aDesc.objects[object].drm_format_modifier ||
++          mDrmFormats[i] != static_cast<int32_t>(aDesc.layers[i].drm_format) ||
++          mOffsets[i] != static_cast<int32_t>(aDesc.layers[i].offset[0]) ||
++          mStrides[i] != static_cast<int32_t>(aDesc.layers[i].pitch[0]) ||
++          mWidthAligned[i] != static_cast<int>(aDesc.width >> subsample) ||
++          mHeightAligned[i] != static_cast<int>(aDesc.height >> subsample) ||
++          mWidth[i] != aWidth >> subsample ||
++          mHeight[i] != aHeight >> subsample) {
++        return false;
++      }
++    }
++
++    return true;
++  };
++
++  if (mBufferPlaneCount && matchesCurrentDescriptor()) {
++    return true;
++  }
++
++  if (mBufferPlaneCount) {
++    ReleaseSurface();
++  }
++
+   if (!ImportPRIMESurfaceDescriptor(aDesc, aWidth, aHeight)) {
+     return false;
+   }
+@@ -1710,11 +1762,9 @@ bool DMABufSurfaceYUV::MoveYUVDataImpl(const VADRMPRIMESurfaceDescriptor& aDesc,
+   for (unsigned int i = 0; i < aDesc.num_layers; i++) {
+     unsigned int object = aDesc.layers[i].object_index[0];
+     // Keep VADRMPRIMESurfaceDescriptor untouched and dup() dmabuf
+     // file descriptors.
+     auto rawFd = dup(aDesc.objects[object].fd);
+     mDmabufFds[i] = new gfx::FileHandleWrapper(UniqueFileHandle(rawFd));
+   }
+-  LogMemoryAddYUV(GetUID(),
+-                  GetUsedMemoryYUV(mFOURCCFormat, mWidth[0], mHeight[0]));
+   return true;
+ }

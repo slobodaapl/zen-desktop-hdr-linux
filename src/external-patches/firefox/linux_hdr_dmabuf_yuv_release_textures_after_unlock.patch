@@ -1,0 +1,20 @@
+diff --git a/gfx/webrender_bindings/RenderDMABUFTextureHost.cpp b/gfx/webrender_bindings/RenderDMABUFTextureHost.cpp
+--- a/gfx/webrender_bindings/RenderDMABUFTextureHost.cpp
++++ b/gfx/webrender_bindings/RenderDMABUFTextureHost.cpp
+@@ -76,8 +76,15 @@ gfx::IntSize RenderDMABUFTextureHost::GetSize(uint8_t aChannelIndex) const {
+   return gfx::IntSize(mSurface->GetWidth(aChannelIndex),
+                       mSurface->GetHeight(aChannelIndex));
+ }
+ 
+-void RenderDMABUFTextureHost::Unlock() {}
++void RenderDMABUFTextureHost::Unlock() {
++  if (mSurface->GetSurfaceType() == DMABufSurface::SURFACE_YUV) {
++    if (mSurface->HoldsTexture() && mGL && mGL->MakeCurrent()) {
++      mGL->fFinish();
++    }
++    DeleteTextureHandle();
++  }
++}
+ 
+ void RenderDMABUFTextureHost::DeleteTextureHandle() {
+   mSurface->ReleaseTextures();

@@ -1,0 +1,117 @@
+diff --git a/gfx/layers/NativeLayerWayland.cpp b/gfx/layers/NativeLayerWayland.cpp
+--- a/gfx/layers/NativeLayerWayland.cpp
++++ b/gfx/layers/NativeLayerWayland.cpp
+@@ -120,6 +120,6 @@ void NativeLayerRootWayland::Init() {
+ 
+   // Get DRM format for surfaces created by GBM.
+-  if (!gfx::gfxVars::UseDMABufSurfaceExport()) {
++  if (!gfx::gfxVars::UseDMABufSurfaceExport() || gfxPlatform::UseHDR()) {
+     RefPtr<DMABufFormats> formats = WaylandDisplayGet()->GetDMABufFormats();
+     DRMFormat* format = nullptr;
+     if (formats) {
+diff --git a/widget/gtk/DMABufSurface.h b/widget/gtk/DMABufSurface.h
+--- a/widget/gtk/DMABufSurface.h
++++ b/widget/gtk/DMABufSurface.h
+@@ -407,7 +407,8 @@ class DMABufSurfaceRGBA : public DMABufSurface {
+   bool CreateGBM(int aWidth, int aHeight, int aDMABufSurfaceFlags,
+                  RefPtr<mozilla::widget::DRMFormat> aFormat);
+   bool CreateExport(mozilla::gl::GLContext* aGLContext, int aWidth, int aHeight,
+-                    int aDMABufSurfaceFlags);
++                    int aDMABufSurfaceFlags,
++                    RefPtr<mozilla::widget::DRMFormat> aFormat);
+ 
+   bool Create(const mozilla::layers::SurfaceDescriptor& aDesc) override;
+   bool Create(RefPtr<mozilla::gfx::FileHandleWrapper>&& aFd,
+diff --git a/widget/gtk/DMABufSurface.cpp b/widget/gtk/DMABufSurface.cpp
+--- a/widget/gtk/DMABufSurface.cpp
++++ b/widget/gtk/DMABufSurface.cpp
+@@ -810,8 +810,9 @@ bool DMABufSurfaceRGBA::Create(mozilla::gl::GLContext* aGLContext, int aWidth,
+           "DMABufSurfaceRGBA::Create(): quit, can't use "
+           "UseDmaBufExportExtension!");
+       return false;
+     }
+-    return CreateExport(context, aWidth, aHeight, aDMABufSurfaceFlags);
++    return CreateExport(context, aWidth, aHeight, aDMABufSurfaceFlags,
++                        aFormat);
+   }
+ 
+   if (gfx::gfxVars::UseDMABufSurfaceExport()) {
+@@ -821,8 +822,9 @@ bool DMABufSurfaceRGBA::Create(mozilla::gl::GLContext* aGLContext, int aWidth,
+           "DMABufSurfaceRGBA::Create(): quit, can't use "
+           "UseDmaBufExportExtension!");
+       return false;
+     }
+-    return CreateExport(aGLContext, aWidth, aHeight, aDMABufSurfaceFlags);
++    return CreateExport(aGLContext, aWidth, aHeight, aDMABufSurfaceFlags,
++                        aFormat);
+   }
+ 
+   if (!aFormat) {
+@@ -915,9 +917,13 @@ bool DMABufSurfaceRGBA::CreateGBM(int aWidth, int aHeight,
+ 
+ bool DMABufSurfaceRGBA::CreateExport(mozilla::gl::GLContext* aGLContext,
+                                      int aWidth, int aHeight,
+-                                     int aDMABufSurfaceFlags) {
+-  LOGDMABUF("DMABufSurfaceRGBA::CreateExport() UID %d size %d x %d flags %d",
+-            mUID, aWidth, aHeight, aDMABufSurfaceFlags);
++                                     int aDMABufSurfaceFlags,
++                                     RefPtr<DRMFormat> aFormat) {
++  LOGDMABUF(
++      "DMABufSurfaceRGBA::CreateExport() UID %d size %d x %d flags %d "
++      "requested format 0x%x",
++      mUID, aWidth, aHeight, aDMABufSurfaceFlags,
++      aFormat ? aFormat->GetFormat() : 0);
+ 
+   MOZ_ASSERT(aGLContext);
+   MOZ_DIAGNOSTIC_ASSERT(!mTexture && !mEGLImage, "Already exported??");
+@@ -940,9 +946,17 @@ bool DMABufSurfaceRGBA::CreateExport(mozilla::gl::GLContext* aGLContext,
+   mGL->fGenTextures(1, &mTexture);
+   const ScopedBindTexture savedTex(mGL, mTexture);
+ 
++  const bool useRGB10 =
++      aFormat && (aFormat->GetFormat() == GBM_FORMAT_ARGB2101010 ||
++                  aFormat->GetFormat() == GBM_FORMAT_XRGB2101010);
++  const GLenum internalFormat = useRGB10 ? LOCAL_GL_RGB10_A2 : LOCAL_GL_RGBA;
++  const GLenum unpackType =
++      useRGB10 ? LOCAL_GL_UNSIGNED_INT_2_10_10_10_REV
++               : LOCAL_GL_UNSIGNED_BYTE;
++
+   GLContext::LocalErrorScope errorScope(*mGL);
+-  mGL->fTexImage2D(LOCAL_GL_TEXTURE_2D, 0, LOCAL_GL_RGBA, mWidth, mHeight, 0,
+-                   LOCAL_GL_RGBA, LOCAL_GL_UNSIGNED_BYTE, nullptr);
++  mGL->fTexImage2D(LOCAL_GL_TEXTURE_2D, 0, internalFormat, mWidth, mHeight, 0,
++                   LOCAL_GL_RGBA, unpackType, nullptr);
+   const auto err = errorScope.GetError();
+   if (err) {
+     LOGDMABUF("  TexImage2D failed %x error %s", err,
+@@ -1474,7 +1489,9 @@ bool DMABufSurfaceRGBA::HasAlpha() {
+   return mFOURCCFormat == GBM_FORMAT_ARGB8888 ||
+          mFOURCCFormat == GBM_FORMAT_ABGR8888 ||
+          mFOURCCFormat == GBM_FORMAT_RGBA8888 ||
+-         mFOURCCFormat == GBM_FORMAT_BGRA8888;
++         mFOURCCFormat == GBM_FORMAT_BGRA8888 ||
++         mFOURCCFormat == GBM_FORMAT_ARGB2101010 ||
++         mFOURCCFormat == GBM_FORMAT_ABGR2101010;
+ }
+ 
+ gfx::SurfaceFormat DMABufSurfaceRGBA::GetFormat() {
+@@ -1487,4 +1504,8 @@ gfx::SurfaceFormat DMABufSurfaceRGBA::GetFormat() {
+      return gfx::SurfaceFormat::A8R8G8B8;
++    case GBM_FORMAT_ARGB2101010:
++      return gfx::SurfaceFormat::R10G10B10A2_UINT32;
++    case GBM_FORMAT_ABGR2101010:
++      return gfx::SurfaceFormat::R10G10B10A2_UINT32;
+     case GBM_FORMAT_RGBA8888:
+       gfxCriticalError() << "DMABufSurfaceRGBA::GetFormat(): Unsupported "
+                             "format GBM_FORMAT_RGBA8888";
+@@ -1494,6 +1515,10 @@ gfx::SurfaceFormat DMABufSurfaceRGBA::GetFormat() {
+ 
+     case GBM_FORMAT_XRGB8888:
+      return gfx::SurfaceFormat::B8G8R8X8;
++    case GBM_FORMAT_XRGB2101010:
++      return gfx::SurfaceFormat::R10G10B10X2_UINT32;
++    case GBM_FORMAT_XBGR2101010:
++      return gfx::SurfaceFormat::R10G10B10X2_UINT32;
+     case GBM_FORMAT_XBGR8888:
+      return gfx::SurfaceFormat::R8G8B8X8;
+     case GBM_FORMAT_BGRX8888:

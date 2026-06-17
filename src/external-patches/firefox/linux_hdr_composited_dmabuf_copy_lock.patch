@@ -1,0 +1,12 @@
+diff --git a/gfx/wr/webrender/src/composite.rs b/gfx/wr/webrender/src/composite.rs
+--- a/gfx/wr/webrender/src/composite.rs
++++ b/gfx/wr/webrender/src/composite.rs
+@@ -1186,7 +1186,7 @@ impl CompositeState {
+                 resource_cache,
+                 gpu_buffer,
+                 deferred_resolves,
+-                true,
++                external_surface.external_image_id.is_some(),
+             );
+ 
+             if cache_item.texture_id != TextureSource::Invalid {
