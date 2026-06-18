@@ -4,10 +4,6 @@
 
 # Linux Wayland HDR video path. Runtime still needs the NVIDIA VA-API direct
 # backend environment from AGENTS.md when testing on the local target machine.
-- name: gfx.webrender.compositor.force-enabled
-  value: true
-  condition: "defined(MOZ_WIDGET_GTK)"
-
 - name: gfx.webrender.overlay-hdr
   value: true
   condition: "defined(MOZ_WIDGET_GTK)"
@@ -20,11 +16,11 @@
   value: true
   condition: "defined(MOZ_WIDGET_GTK)"
 
-- name: gfx.color_management.hdr.force_enabled
+- name: widget.dmabuf.force-enabled
   value: true
   condition: "defined(MOZ_WIDGET_GTK)"
 
-- name: widget.dmabuf.force-enabled
+- name: widget.gtk.global-menu.wayland.enabled
   value: true
   condition: "defined(MOZ_WIDGET_GTK)"
 

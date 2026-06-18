@@ -1,0 +1,36 @@
+diff --git a/gfx/layers/NativeLayerWayland.cpp b/gfx/layers/NativeLayerWayland.cpp
+--- a/gfx/layers/NativeLayerWayland.cpp
++++ b/gfx/layers/NativeLayerWayland.cpp
+@@ -982,6 +982,13 @@ bool NativeLayerWayland::Map(WaylandSurfaceLock* aParentWaylandSurfaceLock) {
+     }
+     mSurface->EnableColorManagementLocked(surfaceLock, yuvColorSpace,
+                                           transferFunction);
++  } else if (gfxPlatform::UseHDR() && !AsNativeLayerWaylandExternal()) {
++    // Regular page content is SDR, but can still carry wide-gamut colors from
++    // tagged images and CSS. Match the fallback CMS output profile used on
++    // Wayland HDR when no monitor ICC profile is available.
++    mSurface->EnableColorManagementLocked(surfaceLock,
++                                          gfx::YUVColorSpace::BT2020,
++                                          gfx::TransferFunction::SRGB);
+   }
+ 
+   if (auto* external = AsNativeLayerWaylandExternal()) {
+diff --git a/gfx/thebes/gfxPlatform.cpp b/gfx/thebes/gfxPlatform.cpp
+--- a/gfx/thebes/gfxPlatform.cpp
++++ b/gfx/thebes/gfxPlatform.cpp
+@@ -2164,6 +2164,15 @@ void gfxPlatform::InitializeCMS() {
+     }
+   }
+ 
++#if defined(MOZ_WIDGET_GTK)
++  if (!mCMSOutputProfile &&
++      (StaticPrefs::gfx_color_management_hdr() ||
++       StaticPrefs::gfx_color_management_hdr_force_enabled())) {
++    mCMSOutputProfile = qcms_profile_create_cicp(CICP::CP_BT2020,
++                                                 CICP::TC_SRGB);
++  }
++#endif
++
+   if (!mCMSOutputProfile) {
+     mCMSOutputProfile = mCMSsRGBProfile;
+   }

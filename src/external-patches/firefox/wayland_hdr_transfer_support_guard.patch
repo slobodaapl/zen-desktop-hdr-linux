@@ -1,0 +1,166 @@
+diff --git a/widget/gtk/nsWaylandDisplay.h b/widget/gtk/nsWaylandDisplay.h
+--- a/widget/gtk/nsWaylandDisplay.h
++++ b/widget/gtk/nsWaylandDisplay.h
+@@ -124,6 +124,21 @@ class nsWaylandDisplay {
+   bool SupportsColorManagerLuminances() const {
+     return mColorManagerSupportedFeature.mLuminances;
+   }
++  bool SupportsColorManagerTFPower() const {
++    return mColorManagerSupportedFeature.mFTPower;
++  }
++  bool SupportsColorManagerTFNamed(uint32_t aTF) const {
++    return aTF < sColorTransfersNum &&
++           mSupportedTransfer[aTF] == static_cast<int>(aTF);
++  }
++  bool SupportsColorManagerPrimariesNamed(uint32_t aPrimaries) const {
++    return aPrimaries < sColorPrimariesNum &&
++           mSupportedPrimaries[aPrimaries] == static_cast<int>(aPrimaries);
++  }
++  bool SupportsColorManagerBT1886TF() const {
++    return SupportsColorManagerTFNamed(
++        WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886);
++  }
+   void SetSupportedCoefficientsAndRanges(uint32_t aCoefficients,
+                                          uint32_t aRange);
+   uint32_t GetColorRange(uint32_t aCoefficients, bool aFullRange);
+diff --git a/widget/gtk/WaylandSurface.cpp b/widget/gtk/WaylandSurface.cpp
+--- a/widget/gtk/WaylandSurface.cpp
++++ b/widget/gtk/WaylandSurface.cpp
+@@ -1297,73 +1297,93 @@ bool WaylandSurface::EnableColorManagementLocked(
+   MOZ_DIAGNOSTIC_ASSERT(mIsMapped);
+   MOZ_DIAGNOSTIC_ASSERT(!mColorSurface);
+ 
+-  auto* colorManager = WaylandDisplayGet()->GetColorManager();
+-  if (!colorManager || !WaylandDisplayGet()->IsHDREnabled()) {
++  auto* waylandDisplay = WaylandDisplayGet();
++  auto* colorManager = waylandDisplay->GetColorManager();
++  if (!colorManager || !waylandDisplay->IsHDREnabled()) {
+     return false;
+   }
+ 
+   LOGWAYLAND("WaylandSurface::EnableColorManagementLocked()");
+ 
++  uint32_t primariesNamed = WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
++  switch (aColorSpace) {
++    case gfx::YUVColorSpace::BT2020:
++      primariesNamed = WP_COLOR_MANAGER_V1_PRIMARIES_BT2020;
++      break;
++    case gfx::YUVColorSpace::BT709:
++      primariesNamed = WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
++      break;
++    case gfx::YUVColorSpace::BT601:
++      // Hopefully if this is actually BT601_625 then it was turned into BT709
++      // already by this point...
++      primariesNamed = WP_COLOR_MANAGER_V1_PRIMARIES_NTSC;
++      break;
++    case gfx::YUVColorSpace::Identity:
++      primariesNamed = WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
++      break;
++  }
++  if (!waylandDisplay->SupportsColorManagerPrimariesNamed(primariesNamed)) {
++    return false;
++  }
++
++  bool useNamedTransfer = true;
++  uint32_t transferNamed = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
++  uint32_t transferPower = 0;
++  switch (aTransferFunction) {
++    case gfx::TransferFunction::PQ:
++      transferNamed = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ;
++      break;
++    case gfx::TransferFunction::HLG:
++      transferNamed = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG;
++      break;
++    case gfx::TransferFunction::BT709:
++      transferNamed = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
++      break;
++    case gfx::TransferFunction::SRGB:
++      if (waylandDisplay->SupportsColorManagerTFNamed(
++              WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB)) {
++        transferNamed = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB;
++      } else if (waylandDisplay->SupportsColorManagerTFPower()) {
++        useNamedTransfer = false;
++        transferPower = 22000;
++      } else {
++        transferNamed = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886;
++      }
++      break;
++    case gfx::TransferFunction::LINEAR:
++      transferNamed = WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR;
++      break;
++  }
++  if (useNamedTransfer &&
++      !waylandDisplay->SupportsColorManagerTFNamed(transferNamed)) {
++    return false;
++  }
++
+   mColorSurface = wp_color_manager_v1_get_surface(colorManager, mSurface);
+ 
+   auto* params = wp_color_manager_v1_create_parametric_creator(colorManager);
+-  switch (aColorSpace) {
+-    case gfx::YUVColorSpace::BT2020:
+-      wp_image_description_creator_params_v1_set_primaries_named(
+-          params, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+-      break;
+-    case gfx::YUVColorSpace::BT709:
+-      wp_image_description_creator_params_v1_set_primaries_named(
+-          params, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+-      break;
+-    case gfx::YUVColorSpace::BT601:
+-      // Hopefully if this os actually BT601_625 then it was turned into BT709
+-      // already by this point...
+-      wp_image_description_creator_params_v1_set_primaries_named(
+-          params, WP_COLOR_MANAGER_V1_PRIMARIES_NTSC);
+-      break;
+-    case gfx::YUVColorSpace::Identity:
+-      wp_image_description_creator_params_v1_set_primaries_named(
+-          params, WP_COLOR_MANAGER_V1_PRIMARIES_SRGB);
+-      break;
+-  }
+-  switch (aTransferFunction) {
+-    case gfx::TransferFunction::PQ:
+-      wp_image_description_creator_params_v1_set_tf_named(
+-          params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+-      break;
+-    case gfx::TransferFunction::HLG:
+-      wp_image_description_creator_params_v1_set_tf_named(
+-          params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_HLG);
+-      break;
+-    case gfx::TransferFunction::BT709:
+-      wp_image_description_creator_params_v1_set_tf_named(
+-          params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_BT1886);
+-      break;
+-    case gfx::TransferFunction::SRGB:
+-      wp_image_description_creator_params_v1_set_tf_named(
+-          params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_SRGB);
+-      break;
+-    case gfx::TransferFunction::LINEAR:
+-      wp_image_description_creator_params_v1_set_tf_named(
+-          params, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR);
+-      break;
++  wp_image_description_creator_params_v1_set_primaries_named(params,
++                                                            primariesNamed);
++  if (useNamedTransfer) {
++    wp_image_description_creator_params_v1_set_tf_named(params, transferNamed);
++  } else {
++    wp_image_description_creator_params_v1_set_tf_power(params, transferPower);
+   }
+   if (aTransferFunction == gfx::TransferFunction::PQ &&
+-      WaylandDisplayGet()->SupportsColorManagerLuminances()) {
++      waylandDisplay->SupportsColorManagerLuminances()) {
+     // Gecko does not plumb per-video mastering metadata to this layer yet; use
+     // HDR10/PQ defaults so the compositor has an explicit reference white.
+     wp_image_description_creator_params_v1_set_luminances(params, 0, 10000,
+                                                          203);
+   }
+   mImageDescription = wp_image_description_creator_params_v1_create(params);
+   // wp_image_description_creator_params_v1_create() consumes params
+   params = nullptr;
+ 
+   // AddRef this to keep it live until callback
+   AddRef();
+   wp_image_description_v1_add_listener(mImageDescription,
+                                        &image_description_listener, this);
+ 
+   return true;
+ }

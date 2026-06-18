@@ -14,9 +14,9 @@
 
 This repository is a fork of Zen Browser with added Linux Wayland HDR support.
 
-HDR support has only been tested on NVIDIA so far. On NVIDIA, VP9 should be
-enabled and AV1 disabled for now because the AV1 hardware decode path has bad
-HDR playback behavior in this setup.
+HDR support has only been tested on NVIDIA so far. AV1 is disabled by default
+and VP9 is enabled by default because VP9 has wider reliable HDR playback
+support. HDR AVIF still images are not implemented yet.
 
 Upstream Zen is a firefox-based browser with the aim of pushing your productivity
 to a new level!

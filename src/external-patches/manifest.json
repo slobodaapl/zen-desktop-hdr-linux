@@ -50,6 +50,10 @@
   },
   {
     "type": "local",
+    "path": "firefox/wayland_hdr_transfer_support_guard.patch"
+  },
+  {
+    "type": "local",
     "path": "firefox/linux_hdr_web_caps.patch"
   },
   {
@@ -67,6 +71,10 @@
   {
     "type": "local",
     "path": "firefox/linux_hdr_wayland_rgb10_render_surface.patch"
+  },
+  {
+    "type": "local",
+    "path": "firefox/linux_hdr_wayland_wcg_page_surfaces.patch"
   },
   {
     "type": "local",
